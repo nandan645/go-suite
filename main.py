@@ -3,6 +3,8 @@ import requests
 import os
 import zipfile
 import io
+from tqdm import tqdm
+import stat
 
 def get_download_url():
     system = platform.system().lower()
@@ -78,15 +80,33 @@ def download_and_extract(url, dest_folder):
     binary_name = "rclone.exe" if platform.system().lower() == "windows" else "rclone"
     local_path = os.path.join(dest_folder, binary_name)
 
+    # Streaming the request
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(r.content)) as zip_ref:
+        total_size = int(r.headers.get('content-length', 0))
+        block_size = 1024
+        progress_bar = tqdm(total=total_size, unit='iB', unit_scale=True)
+        zip_buffer = io.BytesIO()
+        
+        for data in r.iter_content(block_size):
+            progress_bar.update(len(data))
+            zip_buffer.write(data)
+        
+        progress_bar.close()
+        
+        zip_buffer.seek(0)  # Rewind the buffer to the beginning
+
+        with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
             binary_file_name = find_binary_in_zip(zip_ref, binary_name)
             if binary_file_name is None:
                 raise Exception(f"No binary named '{binary_name}' found in the archive")
             with zip_ref.open(binary_file_name) as binary_file:
                 with open(local_path, 'wb') as f:
                     f.write(binary_file.read())
+    
+    # Make the binary executable (non-Windows systems)
+    if platform.system().lower() != "windows":
+        os.chmod(local_path, os.stat(local_path).st_mode | stat.S_IEXEC)
     
     return local_path
 
